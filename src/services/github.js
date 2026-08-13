@@ -11,17 +11,19 @@ export class GitHubError extends Error {
 export function parseGitHubUrl(value) {
   let url
   try { url = new URL(value.trim()) } catch { throw new GitHubError('Enter a valid GitHub repository URL.', 'invalid_url') }
-  if (!['github.com', 'www.github.com'].includes(url.hostname.toLowerCase()) || url.protocol !== 'https:' || url.port) {
-    throw new GitHubError('Use an HTTPS github.com repository URL.', 'invalid_url')
+  if (!['github.com', 'www.github.com'].includes(url.hostname.toLowerCase()) || !['https:', 'http:'].includes(url.protocol)) {
+    throw new GitHubError('Use a public github.com repository or pull request URL.', 'invalid_url')
   }
   const parts = url.pathname.split('/').filter(Boolean)
-  if (parts.length !== 2 || !/^[\w.-]+$/.test(parts[0]) || !/^[\w.-]+$/.test(parts[1])) {
-    throw new GitHubError('The URL must look like https://github.com/owner/repository.', 'invalid_url')
+  const isPull = parts[2] === 'pull' && /^\d+$/.test(parts[3] || '')
+  if (parts.length < 2 || (!isPull && parts.length > 2) || (isPull && parts.length > 4) || !/^[\w.-]+$/.test(parts[0]) || !/^[\w.-]+$/.test(parts[1])) {
+    throw new GitHubError('The URL must identify a GitHub repository or pull request.', 'invalid_url')
   }
   const owner = parts[0]
   const repo = parts[1].replace(/\.git$/i, '')
   if (!repo) throw new GitHubError('The repository name is missing.', 'invalid_url')
-  return { owner, repo, fullName: `${owner}/${repo}`, url: `https://github.com/${owner}/${repo}` }
+  const pullNumber = isPull ? Number(parts[3]) : null
+  return { owner, repo, pullNumber, kind: isPull ? 'pull_request' : 'repository', fullName: `${owner}/${repo}`, url: `https://github.com/${owner}/${repo}${pullNumber ? `/pull/${pullNumber}` : ''}` }
 }
 
 async function request(path) {
@@ -61,12 +63,52 @@ async function fetchBoundedTree(owner, repo, branch) {
 
 const FIX_TERMS = /\b(fix(?:e[ds])?|bug(?:fix)?|regression|crash|error|hotfix|security|auth|timeout|duplicate|race|resolv(?:e[ds]?|ing))\b/gi
 
-export async function inspectRepository(input, onProgress = () => {}) {
+const SOURCE_EXTENSIONS = /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|php|cs|vue|svelte)$/i
+const EXCLUDED_PATH = /(^|\/)(?:vendor|dist|build|coverage|node_modules|\.next|generated|fixtures?)\//i
+const termSet = value => new Set((value.toLowerCase().match(/[a-z][a-z0-9_-]{2,}/g) || []).filter(term => !['the','and','for','with','from','this','that','change','support','additional'].includes(term)))
+
+function relevance(path, context) {
+  const lower = path.toLowerCase()
+  const basename = lower.split('/').pop()
+  let score = context.toLowerCase().includes(lower) || context.toLowerCase().includes(basename) ? 20 : 0
+  for (const term of termSet(context)) if (lower.includes(term)) score += 2
+  if (/(src|lib|app)\//i.test(path)) score += 1
+  return score
+}
+
+function decodeContent(content) {
+  try {
+    const binary = atob(content.replace(/\n/g, ''))
+    return new TextDecoder().decode(Uint8Array.from(binary, char => char.charCodeAt(0)))
+  } catch { return '' }
+}
+
+function sourceEvidence(path, content, htmlUrl) {
+  const lines = content.split(/\r?\n/)
+  const signalPattern = /\b(?:export\s+(?:default\s+)?|class\s+|function\s+|const\s+|async\s+function\s+)([A-Za-z_$][\w$]*)|\b(fetch|request|parse|validate|throw|catch|URL)\b/
+  const hits = lines.map((line, index) => ({ line, index })).filter(item => signalPattern.test(item.line)).slice(0, 4)
+  const anchor = hits[0]?.index ?? 0
+  const start = Math.max(0, anchor - 2)
+  const end = Math.min(lines.length, start + 12)
+  const symbols = [...new Set(hits.map(item => item.line.match(signalPattern)?.[1]).filter(Boolean))].slice(0, 6)
+  return { path, symbols, signals: hits.map(item => item.line.trim()).slice(0, 5), snippet: lines.slice(start, end).join('\n').slice(0, 1800), startLine: start + 1, endLine: end, url: `${htmlUrl}#L${start + 1}-L${end}` }
+}
+
+export async function inspectRepository(input, proposedChange = '', onProgress = () => {}) {
   const parsed = parseGitHubUrl(input)
   onProgress('Reading repository metadata')
   const repo = await request(`/repos/${parsed.owner}/${parsed.repo}`)
   if (!repo || repo.private) throw new GitHubError('Only public GitHub repositories can be analyzed.', 'not_found')
-  const branch = repo.default_branch
+  let pullRequest = null
+  if (parsed.pullNumber) {
+    onProgress('Reading pull request changes')
+    const pull = await request(`/repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.pullNumber}`)
+    const files = (await request(`/repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.pullNumber}/files?per_page=100`)) || []
+    pullRequest = { number: pull.number, title: pull.title, body: pull.body || '', author: pull.user?.login || 'Unknown', url: pull.html_url,
+      baseBranch: pull.base?.ref, headBranch: pull.head?.ref, headSha: pull.head?.sha, additions: pull.additions, deletions: pull.deletions, changedFiles: pull.changed_files,
+      files: files.slice(0, 100).map(file => ({ path: file.filename, status: file.status, additions: file.additions, deletions: file.deletions, patch: file.patch?.slice(0, 5000) || '' })) }
+  }
+  const branch = pullRequest?.headSha || repo.default_branch
   if (!branch) throw new GitHubError('This repository is empty and has no default branch to inspect.', 'empty')
 
   onProgress('Inspecting recent commit history')
@@ -79,6 +121,9 @@ export async function inspectRepository(input, onProgress = () => {}) {
 
   onProgress('Mapping a bounded repository tree')
   const tree = await fetchBoundedTree(parsed.owner, parsed.repo, branch)
+  for (const file of pullRequest?.files || []) {
+    if (!tree.paths.some(item => item.path === file.path)) tree.paths.push({ path: file.path, type: 'file', size: 0, pullRequestChange: true })
+  }
   const candidates = recentCommits.map(commit => {
     const signals = [...new Set((commit.message.match(FIX_TERMS) || []).map(x => x.toLowerCase()))]
     return { ...commit, signals, score: signals.length + (/^(fix|hotfix)/i.test(commit.message) ? 1 : 0) }
@@ -88,14 +133,27 @@ export async function inspectRepository(input, onProgress = () => {}) {
   const historicalFixes = []
   for (const candidate of candidates) {
     const detail = await request(`/repos/${parsed.owner}/${parsed.repo}/commits/${candidate.sha}`)
-    const files = (detail?.files || []).slice(0, 25).map(file => file.filename)
+    const detailFiles = (detail?.files || []).slice(0, 25)
+    const files = detailFiles.map(file => file.filename)
     const confidence = Math.min(0.94, 0.48 + candidate.signals.length * 0.12 + (files.length ? 0.08 : 0))
-    historicalFixes.push({ ...candidate, files, confidence, heuristic: true })
+    historicalFixes.push({ ...candidate, files, patches: detailFiles.filter(file => file.patch).slice(0, 5).map(file => ({ path: file.filename, patch: file.patch.slice(0, 3500) })), confidence, heuristic: true })
+  }
+
+  onProgress('Reading relevant source evidence')
+  const context = `${pullRequest?.title || ''} ${pullRequest?.body || ''} ${pullRequest?.files.map(file => file.path).join(' ') || ''}`
+  const proposedContext = `${proposedChange} ${context}`
+  const candidatesForSource = tree.paths.filter(item => item.type === 'file' && (item.pullRequestChange || (item.size > 0 && item.size <= 100000)) && SOURCE_EXTENSIONS.test(item.path) && !EXCLUDED_PATH.test(item.path))
+    .sort((a, b) => relevance(b.path, proposedContext) - relevance(a.path, proposedContext)).slice(0, 5)
+  const deepEvidence = []
+  for (const file of candidatesForSource) {
+    const item = await request(`/repos/${parsed.owner}/${parsed.repo}/contents/${file.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(branch)}`)
+    const content = item?.encoding === 'base64' ? decodeContent(item.content || '') : ''
+    if (content && !content.includes('\0')) deepEvidence.push(sourceEvidence(file.path, content, item.html_url))
   }
 
   return {
     repository: { owner: parsed.owner, name: parsed.repo, fullName: repo.full_name, url: repo.html_url, description: repo.description,
-      defaultBranch: branch, language: repo.language || 'Unknown', stars: repo.stargazers_count, forks: repo.forks_count, updatedAt: repo.updated_at },
-    recentCommits, historicalFixes, tree,
+      defaultBranch: repo.default_branch, language: repo.language || 'Unknown', stars: repo.stargazers_count, forks: repo.forks_count, updatedAt: repo.updated_at },
+    pullRequest, recentCommits, historicalFixes, tree, deepEvidence,
   }
 }

@@ -21,7 +21,7 @@ const pathWords = path => [...words(path.replace(/[/.\\_-]/g, ' '))]
 const severityRank = { low: 1, medium: 2, high: 3 }
 const includesSignal = (value, signal) => signal.includes(' ') || signal.includes('-') ? value.includes(signal) : words(value).has(signal)
 const matchingSignals = (value, signals) => signals.filter(signal => includesSignal(value, signal))
-const sourceEntries = inspection => (inspection.deepEvidence || inspection.sourceSignals || []).map(entry => typeof entry === 'string' ? { text: entry, path: '' } : { text: `${entry.signal || ''} ${entry.content || ''} ${(entry.signals || []).join(' ')}`, path: entry.path || entry.file || '' })
+const sourceEntries = inspection => (inspection.deepEvidence || inspection.sourceSignals || []).map(entry => typeof entry === 'string' ? { text: entry, path: '' } : { text: `${entry.signal || ''} ${entry.content || ''} ${entry.snippet || ''} ${(entry.signals || []).join(' ')}`, path: entry.path || entry.file || '' })
 const withoutInternalStrength = risk => Object.fromEntries(Object.entries(risk).filter(([key]) => key !== '_strength'))
 
 function mentionedPaths(change, paths) {

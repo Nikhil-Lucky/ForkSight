@@ -25,11 +25,12 @@ export default function Analyze() {
   const submit = async (event) => {
     event.preventDefault(); setError(''); setRunning(true)
     try {
-      const inspection = await inspectRepository(repoUrl, setStage)
+      const inspection = await inspectRepository(repoUrl, change, setStage)
       setStage('Analyzing proposed change against evidence')
       await new Promise(resolve => setTimeout(resolve, 100))
-      const intelligence = analyzeIntelligence(change, inspection, selected)
-      const scan = { id: `${Date.now()}`, createdAt: new Date().toISOString(), change, modes: selected, ...inspection, ...intelligence }
+      const changeContext = inspection.pullRequest ? `${inspection.pullRequest.title}. ${inspection.pullRequest.body || ''}${change ? `\nAdditional context: ${change}` : ''}` : change
+      const intelligence = analyzeIntelligence(changeContext, inspection, selected)
+      const scan = { id: `${Date.now()}`, createdAt: new Date().toISOString(), change: changeContext, userChange: change, modes: selected, ...inspection, ...intelligence }
       saveScan(scan)
       setStage('Analysis complete')
       navigate('/analysis')
@@ -40,7 +41,7 @@ export default function Analyze() {
     <div className="form-layout section-wrap">
       <form className="analysis-form" onSubmit={submit}>
         <div className="form-heading"><span>01</span><div><h2>Repository context</h2><p>Define where the change will live.</p></div></div>
-        <label>Public GitHub repository URL <small>REQUIRED</small><div className="input-wrap"><GitBranch size={18}/><input type="url" required value={repoUrl} onChange={e => setRepoUrl(e.target.value)} disabled={running} placeholder="https://github.com/organization/repository" /></div></label>
+        <label>Public GitHub repository or pull request URL <small>REQUIRED</small><div className="input-wrap"><GitBranch size={18}/><input type="url" required value={repoUrl} onChange={e => setRepoUrl(e.target.value)} disabled={running} placeholder="https://github.com/organization/repository or /pull/123" /></div></label>
         <label>Proposed change or feature <small>REQUIRED</small><textarea required minLength="8" rows="6" value={change} onChange={e => setChange(e.target.value)} disabled={running} placeholder="Describe what you plan to change, why it is needed, and which parts of the system it may touch..."/><span className="field-help">Specific terms and areas improve evidence matching.</span></label>
         <div className="form-heading mode-heading"><span>02</span><div><h2>Analysis modes</h2><p>Select one direction or run both together.</p></div><button type="button" className="both-button" disabled={running} onClick={() => setSelected(['future','history'])}>Run both</button></div>
         <div className="mode-grid">{modes.map(({id, icon: Icon, label, detail}) => { const active = selected.includes(id); return <button type="button" disabled={running} className={`mode-card ${active ? 'selected' : ''}`} onClick={() => toggle(id)} key={id}><span className="check-box">{active && <Check size={14}/>}</span><Icon/><strong>{label}</strong><p>{detail}</p></button>})}</div>
