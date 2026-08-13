@@ -1,26 +1,38 @@
-import { Activity, Boxes, FileClock, History, LayoutDashboard, Network, Radar, Scale, ShieldCheck } from 'lucide-react'
+import { Activity, AlertTriangle, Boxes, ExternalLink, FileClock, History, LayoutDashboard, Network, Radar, Scale, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import Brand from '../components/Brand'
+import { loadScan } from '../services/storage'
 
 const tabs = [
   { name: 'Overview', icon: LayoutDashboard }, { name: 'Future Risks', icon: Radar }, { name: 'Bug Resurrection', icon: History },
   { name: 'Blast Radius', icon: Network }, { name: 'Agent Debate', icon: Scale }, { name: 'Prevention Plan', icon: ShieldCheck },
 ]
+const percent = n => `${Math.round(n * 100)}%`
+const shortDate = value => value ? new Date(value).toLocaleDateString() : 'Unknown date'
+
+function RiskCard({ risk }) {
+  return <article className="finding-card"><div className="finding-top"><span className={`severity ${risk.severity}`}>{risk.severity}</span><span>{percent(risk.confidence)} confidence</span></div><h3>{risk.title}</h3><p>{risk.explanation}</p><h4>Evidence</h4><ul>{risk.evidence.map(item => <li key={item}>{item}</li>)}</ul>{risk.affectedAreas.length > 0 && <div className="path-list">{risk.affectedAreas.map(path => <code key={path}>{path}</code>)}</div>}<div className="finding-action"><strong>Prevention</strong><p>{risk.prevention}</p><strong>Suggested test</strong><p>{risk.suggestedTest}</p></div><small>Predicted / potential risk — heuristic, not a confirmed defect</small></article>
+}
+
+function ResurrectionCard({ risk }) {
+  return <article className="finding-card resurrection"><div className="finding-top"><span className={`severity ${risk.severity}`}>{risk.severity}</span><span>{percent(risk.confidence)} confidence</span></div><h3>{risk.title}</h3><p><strong>{risk.relationship}</strong> with a likely historical fix.</p><a className="commit-link" href={risk.commitUrl} target="_blank" rel="noreferrer"><code>{risk.oldCommit.slice(0, 7)}</code> {risk.oldFixDescription} <ExternalLink size={13}/></a><p className="finding-date">{shortDate(risk.date)}</p><h4>Evidence</h4><ul>{risk.evidence.map(item => <li key={item}>{item}</li>)}</ul><div className="path-list">{risk.files.map(path => <code key={path}>{path}</code>)}</div><div className="finding-action"><strong>Prevention</strong><p>{risk.prevention}</p></div><small>Potential resurrection risk — historical overlap is heuristic, not proof</small></article>
+}
 
 export default function Analysis() {
   const [active, setActive] = useState('Overview')
+  const [scan] = useState(loadScan)
+  if (!scan) return <div className="workspace"><aside className="workspace-sidebar"><Brand/></aside><main className="workspace-main"><section className="workspace-empty"><Radar/><h2>No analysis found.</h2><p>Run a repository analysis first. ForkSight does not show sample or fabricated findings.</p><Link to="/analyze" className="button">Configure an analysis</Link></section></main></div>
+  const summary = <div className="summary-grid"><article><strong>{scan.recentCommits.length}</strong><span>Commits inspected</span></article><article><strong>{scan.tree.paths.length}</strong><span>Paths inspected</span></article><article><strong>{scan.historicalFixes.length}</strong><span>Likely historical fixes</span></article><article><strong className={`risk-text ${scan.overallRisk}`}>{scan.overallRisk}</strong><span>Overall predicted risk</span></article></div>
+  let content
+  if (active === 'Overview') content = <><section className="repo-summary"><div><span className="eyebrow">Repository summary</span><h2>{scan.repository.fullName}</h2><p>{scan.repository.description || 'No repository description provided.'}</p></div><dl><div><dt>Default branch</dt><dd>{scan.repository.defaultBranch}</dd></div><div><dt>Language</dt><dd>{scan.repository.language}</dd></div><div><dt>Tree scope</dt><dd>{scan.tree.truncated ? 'Bounded / truncated' : 'Complete within inspected directories'}</dd></div></dl></section>{summary}<section className="results-section"><h2>Evidence snapshot</h2><div className="two-columns"><div><h3>Potential future risks</h3>{scan.futureRisks.slice(0,3).map(r => <RiskCard risk={r} key={r.title}/>) || null}{!scan.futureRisks.length && <p className="no-findings">This mode was not selected or no supported risk signal was found.</p>}</div><div><h3>Historical fixes & overlap</h3>{scan.resurrectionRisks.slice(0,3).map(r => <ResurrectionCard risk={r} key={r.oldCommit}/>) }{!scan.resurrectionRisks.length && <p className="no-findings">No historical overlap was detected in the bounded recent history.</p>}</div></div></section></>
+  if (active === 'Future Risks') content = <section className="results-section"><span className="eyebrow">Predicted / potential risks</span><h2>Future Risks</h2><p className="section-note">Generated from proposed-change terms, discovered paths, and repository evidence. These are not confirmed bugs.</p><div className="cards-grid">{scan.futureRisks.map(r => <RiskCard risk={r} key={r.title}/>)}</div>{!scan.futureRisks.length && <p className="no-findings">Future Risk mode was not run.</p>}</section>
+  if (active === 'Bug Resurrection') content = <section className="results-section"><span className="eyebrow">Historical overlap detected</span><h2>Bug Resurrection evidence</h2><p className="section-note">Likely fixes are inferred from commit messages and compared with change domains, keywords, and paths.</p><div className="cards-grid">{scan.resurrectionRisks.map(r => <ResurrectionCard risk={r} key={r.oldCommit}/>)}</div>{!scan.resurrectionRisks.length && <p className="no-findings">No overlap was detected, or Bug Resurrection mode was not run.</p>}</section>
+  if (active === 'Blast Radius') content = <section className="results-section"><span className="eyebrow">Real discovered paths only</span><h2>Potential blast radius</h2><p className="section-note">These paths come only from the bounded GitHub tree or changed files in real candidate commits.</p><div className="blast-list">{scan.blastRadius.map(path => <code key={path}>{path}</code>)}</div>{!scan.blastRadius.length && <p className="no-findings">No evidence-backed path could be associated with this change.</p>}</section>
+  if (active === 'Agent Debate') content = <section className="workspace-empty compact"><Scale/><span className="eyebrow">Later AI layer</span><h2>Agent Debate is not implemented.</h2><p>This milestone uses transparent deterministic heuristics. No debate, agents, or AI consensus has been faked.</p></section>
+  if (active === 'Prevention Plan') content = <section className="results-section"><span className="eyebrow">Evidence-linked actions</span><h2>Prevention Plan</h2><div className="plan-list">{scan.preventionPlan.map((item,i) => <article key={`${item.source}-${i}`}><span>{String(i+1).padStart(2,'0')}</span><div><h3>{item.source}</h3><p>{item.action}</p>{item.test && <p><strong>Test:</strong> {item.test}</p>}</div></article>)}</div>{!scan.preventionPlan.length && <p className="no-findings">No prevention steps were generated for the selected modes.</p>}</section>
   return <div className="workspace">
-    <aside className="workspace-sidebar"><Brand/><div className="workspace-label">ANALYSIS WORKSPACE</div><nav>{tabs.map(({name, icon: Icon}) => <button className={active === name ? 'active' : ''} onClick={() => setActive(name)} key={name}><Icon size={17}/><span>{name}</span></button>)}</nav><div className="side-status"><span/><div><strong>Workspace idle</strong><small>No scan has been run</small></div></div></aside>
-    <main className="workspace-main">
-      <header className="workspace-header"><div><small>REPOSITORY / NOT CONNECTED</small><h1>{active}</h1></div><div className="workspace-actions"><span className="empty-badge"><i/> EMPTY WORKSPACE</span><a href="/analyze" className="button button-small">New analysis</a></div></header>
-      <div className="workspace-content">
-        <div className="context-bar"><div><Boxes/><span><small>REPOSITORY</small>Not configured</span></div><div><FileClock/><span><small>PROPOSED CHANGE</small>Not provided</span></div><div><Activity/><span><small>STATUS</small>Waiting for setup</span></div></div>
-        <section className="workspace-empty">
-          <div className="radar-empty"><div className="orbit one"/><div className="orbit two"/><div className="orbit three"/><Radar/></div>
-          <span className="eyebrow">{active} / Waiting state</span><h2>Nothing to inspect yet.</h2><p>This workspace is ready to organize {active.toLowerCase()} when a real analysis engine is connected. No findings have been generated or implied.</p><a href="/analyze" className="button">Configure an analysis</a>
-          <div className="empty-command"><span>$</span> forksight status <b>— awaiting repository context</b></div>
-        </section>
-      </div>
-    </main>
+    <aside className="workspace-sidebar"><Brand/><div className="workspace-label">ANALYSIS WORKSPACE</div><nav>{tabs.map(({name, icon: Icon}) => <button className={active === name ? 'active' : ''} onClick={() => setActive(name)} key={name}><Icon size={17}/><span>{name}</span></button>)}</nav><div className="side-status"><span className="live-dot"/><div><strong>Analysis complete</strong><small>{shortDate(scan.createdAt)}</small></div></div></aside>
+    <main className="workspace-main"><header className="workspace-header"><div><small>REPOSITORY / {scan.repository.fullName.toUpperCase()}</small><h1>{active}</h1></div><div className="workspace-actions"><span className={`risk-badge ${scan.overallRisk}`}><AlertTriangle size={12}/> {scan.overallRisk} risk</span><Link to="/analyze" className="button button-small">New analysis</Link></div></header><div className="workspace-content"><div className="context-bar"><div><Boxes/><span><small>REPOSITORY</small>{scan.repository.fullName} · {scan.repository.language}</span></div><div><FileClock/><span><small>PROPOSED CHANGE</small>{scan.change}</span></div><div><Activity/><span><small>EVIDENCE</small>{scan.recentCommits.length} commits · {scan.tree.paths.length} paths</span></div></div>{content}</div></main>
   </div>
 }
