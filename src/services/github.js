@@ -11,7 +11,7 @@ export class GitHubError extends Error {
 export function parseGitHubUrl(value) {
   let url
   try { url = new URL(value.trim()) } catch { throw new GitHubError('Enter a valid GitHub repository URL.', 'invalid_url') }
-  if (!['github.com', 'www.github.com'].includes(url.hostname.toLowerCase()) || url.protocol !== 'https:') {
+  if (!['github.com', 'www.github.com'].includes(url.hostname.toLowerCase()) || url.protocol !== 'https:' || url.port) {
     throw new GitHubError('Use an HTTPS github.com repository URL.', 'invalid_url')
   }
   const parts = url.pathname.split('/').filter(Boolean)
