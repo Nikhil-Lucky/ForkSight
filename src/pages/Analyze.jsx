@@ -1,6 +1,6 @@
 import { ArrowRight, Check, GitBranch, History, LoaderCircle, Radar, ShieldAlert } from 'lucide-react'
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import PageShell from '../components/PageShell'
 import { inspectRepository } from '../services/github'
 import { analyzeIntelligence } from '../services/intelligence'
@@ -13,9 +13,11 @@ const modes = [
 
 export default function Analyze() {
   const navigate = useNavigate()
-  const [selected, setSelected] = useState(['future', 'history'])
-  const [repoUrl, setRepoUrl] = useState('')
-  const [change, setChange] = useState('')
+  const location = useLocation()
+  const rerun = location.state?.rerun
+  const [selected, setSelected] = useState(rerun?.modes || ['future', 'history'])
+  const [repoUrl, setRepoUrl] = useState(rerun?.repoUrl || '')
+  const [change, setChange] = useState(rerun?.change || '')
   const [stage, setStage] = useState('')
   const [error, setError] = useState('')
   const [running, setRunning] = useState(false)

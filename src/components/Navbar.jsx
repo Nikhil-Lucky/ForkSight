@@ -13,6 +13,7 @@ export default function Navbar() {
       <nav className={open ? 'nav-links open' : 'nav-links'}>
         <NavLink to="/" onClick={close}>Product</NavLink>
         <NavLink to="/graveyard" onClick={close}>Bug Graveyard</NavLink>
+        <NavLink to="/history" onClick={close}>History</NavLink>
         <NavLink to="/analysis" onClick={close}>Workspace</NavLink>
         <Link className="button button-small" to="/analyze" onClick={close}>Analyze repository</Link>
       </nav>
